@@ -16,6 +16,7 @@ import (
 type Config struct {
 	DB      string
 	Verbose bool
+	Fatal   bool
 }
 
 func main() {
@@ -23,10 +24,12 @@ func main() {
 	var config = Config{
 		DB:      "/var/lib/4byte.dat",
 		Verbose: false,
+		Fatal:   false,
 	}
 
 	flag.StringVar(&config.DB, "db", config.DB, "db file")
 	flag.BoolVar(&config.Verbose, "v", config.Verbose, "verbose output to stderr")
+	flag.BoolVar(&config.Fatal, "f", config.Fatal, "treat not found as fatal error")
 	flag.Parse()
 	if err := run(config); err != nil {
 		log.Fatalln("fatal:", err)
@@ -75,7 +78,7 @@ func run(config Config) error {
 		if len(b) != 4 {
 			return fmt.Errorf("argument %d is not four bytes, %d != 4", i, len(b))
 		}
-		resp, err := lookup4byte(db, b)
+		resp, err := lookup4byte(db, b, config.Fatal)
 		if err != nil {
 			return err
 		}
@@ -85,21 +88,20 @@ func run(config Config) error {
 	return nil
 }
 
-func lookup4byte(db *bbolt.DB, b []byte) (string, error) {
-
+// db read
+func lookup4byte(db *bbolt.DB, key []byte, failIfNotFound bool) (string, error) {
 	var resp string
-	// db read
 	err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte("4byte")).Get(b)
+		b := tx.Bucket([]byte("4byte")).Get(key)
 		if b != nil {
 			resp = string(b)
 			return nil
 		}
+		if failIfNotFound {
+			return fmt.Errorf("%#02x not found", key)
+		}
 		resp = "not found"
 		return nil
 	})
-	if err != nil {
-		return "", fmt.Errorf("db %v", err)
-	}
-	return resp, nil
+	return resp, err
 }
