@@ -60,7 +60,7 @@ func newWalkFn(tx *bbolt.Tx) func(string, fs.DirEntry, error) error {
 
 func run() error {
 	var path = "../4byte/4bytes-master/signatures"
-	var dbpath = "db.dat"
+	var dbpath = "4byte.dat"
 	flag.StringVar(&path, "path", path, "path to signatures directory")
 	flag.StringVar(&dbpath, "db", dbpath, "file to write new database")
 	flag.Parse()
