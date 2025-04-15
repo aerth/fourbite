@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.etcd.io/bbolt"
 )
@@ -22,6 +23,41 @@ type Config struct {
 	WebPrefix      string
 }
 
+func getPathKeys(ss []string) [][]byte {
+	l := len(ss)
+	pathkeys := make([][]byte, l)
+	for i := range ss {
+		if len(ss[i]) != 8 {
+			log.Printf("bad path %q", ss[i])
+			return nil
+		}
+		pathkey, err := hex.DecodeString(ss[i])
+		if err != nil {
+			log.Printf("error decoding hex path %q: %v", ss[i], err)
+			return nil
+		}
+		pathkeys[i] = pathkey
+	}
+	return pathkeys
+}
+
+func cleanua(ua string) string {
+	if len(ua) > 200 {
+		ua = ua[:200]
+	}
+	ua = strings.TrimSpace(ua)
+	for i := 0; i < len(ua); i++ {
+		if !unicode.IsPrint(rune(ua[i])) {
+			ua = ua[:i]
+			break
+		}
+	}
+	if ua == "" {
+		return "unknown"
+	}
+	return ua
+}
+
 func main() {
 	var config = Config{
 		Addr:           "127.0.0.1:8081",
@@ -29,7 +65,7 @@ func main() {
 		AllowedOrigins: "*",
 		WebPrefix:      "/4byte/",
 	}
-
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.StringVar(&config.Addr, "addr", config.Addr, "serve addr")
 	flag.StringVar(&config.DB, "db", config.DB, "db file")
 	flag.StringVar(&config.WebPrefix, "web", config.WebPrefix, "url prefix to cut (ex: /api/4byte/)")
@@ -46,56 +82,65 @@ func main() {
 		w.Header().Set("X-Info-Fourbite", "https://github.com/aerth")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "no-cache")
+		log.Printf("request %s %q (%s)", r.Method, r.URL.Path, cleanua(r.UserAgent()))
 		if r.Method != http.MethodGet {
+			log.Printf("bad method %q", r.Method)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-
 		var path = strings.TrimPrefix(r.URL.Path, config.WebPrefix)
-		if path == "" {
+		if len(path) < 8 {
+			log.Printf("path too short %q", path)
+			http.Error(w, "path too short", http.StatusBadRequest)
 			return
 		}
-		path = path[1:]
+		// log.Printf("path: %q", path)
 		var l = len(path)
-		if l > 800 {
-			log.Println("over 800")
-			path = path[:899]
+		if l > 88 {
+			http.Error(w, "path too long", http.StatusBadRequest)
 			return
 		}
-		if l != 8 && (l+1)%9 != 0 {
-			http.NotFound(w, r)
-			return
-		}
-
 		ss := strings.Split(path, ",")
 		l = len(ss)
 		if l == 0 || ss[0] == "" {
+			log.Printf("bad path %q", path)
+			http.NotFound(w, r)
 			return
 		}
 		resp := make([]string, l)
-		pathkeys := make([][]byte, l)
-		for i := 0; i < l; i++ {
-			pathkey, err := hex.DecodeString(ss[i])
-			if err != nil {
-				fmt.Fprintf(w, "error %v", err)
-				return
-			}
-			log.Printf("loading path %#02x", pathkey)
-			pathkeys[i] = pathkey
 
+		pathkeys := getPathKeys(ss)
+		if len(pathkeys) == 0 {
+			log.Printf("bad pathkeys %q", path)
+			http.NotFound(w, r)
+			return
 		}
 		err = db.View(func(tx *bbolt.Tx) error {
 			bucket := tx.Bucket(bucketName)
 			if bucket == nil {
-				return fmt.Errorf("bucket is nil...")
+				return ErrBucketNil
 			}
-			for i := 0; i < l; i++ {
-				resp[i] = string(bucket.Get(pathkeys[i]))
-				log.Printf("%d: %s", i, resp[i])
+			isempty := true
+			for i := range pathkeys {
+				resp[i] = string(bucket.Get(pathkeys[i])) // possibly empty
+				if resp[i] != "" {
+					isempty = false
+				}
+				// log.Printf("got path %d: %02x %q", i, pathkeys[i], resp[i])
+			}
+			if isempty {
+				return ErrNotFound
 			}
 			return nil
 		})
+		if err == ErrNotFound {
+			http.NotFound(w, r)
+			return
+		}
 		if err != nil {
 			log.Printf("db read: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
 		if len(resp) != 0 {
 			json.NewEncoder(w).Encode(resp)
@@ -108,3 +153,6 @@ func main() {
 		log.Fatalln(err)
 	}
 }
+
+var ErrBucketNil = errors.New("bucket is nil")
+var ErrNotFound = errors.New("not found")
