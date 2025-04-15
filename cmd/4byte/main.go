@@ -4,13 +4,14 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"hash"
 	"log"
 	"os"
 	"strings"
 	"time"
 
-	"gitlab.com/aquachain/aquachain/crypto"
 	"go.etcd.io/bbolt"
+	"golang.org/x/crypto/sha3"
 )
 
 type Config struct {
@@ -56,10 +57,7 @@ func run(config Config) error {
 		}
 		// hash
 		if arg[l-1] == ')' {
-			if verbose {
-				log.Println("hashing:", arg)
-			}
-			b := crypto.Keccak256Hash([]byte(arg))
+			b := Keccak256([]byte(arg))
 			fmt.Fprintf(os.Stdout, "%s %#02x\n", arg, b[:4])
 			continue
 		}
@@ -104,4 +102,15 @@ func lookup4byte(db *bbolt.DB, key []byte, failIfNotFound bool) (string, error) 
 		return nil
 	})
 	return resp, err
+}
+
+func Keccak256(data ...[]byte) []byte {
+	d := NewKeccak256()
+	for _, b := range data {
+		d.Write(b)
+	}
+	return d.Sum(nil)
+}
+func NewKeccak256() hash.Hash {
+	return sha3.NewLegacyKeccak256()
 }
